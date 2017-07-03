@@ -1,7 +1,0 @@
-#!/bin/bash
-#
-# Run the EveKit Data Platform command line tool
-#
-toolhome=/home/orbital/structure_md/evekit-source-structure-md
-exec java -jar ${toolhome}/target/evekit-structure-md-1.0.0-SNAPSHOT-jar-with-dependencies.jar "$@"
-
