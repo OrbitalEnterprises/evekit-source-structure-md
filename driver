@@ -1,0 +1,134 @@
+#!/bin/bash
+#
+# $1 - config file
+#
+config=$1
+source_id=$(jq -r -c '.source_id' ${config})
+structure_list="$(jq -r -c '.structures|.[]' ${config})"
+token_id=$(jq -r -c '.token_id' ${config})
+tmp_dir="$(jq -r -c '.tmp_dir' ${config})"
+snap_dir="$(jq -r -c '.snapshot_dir' ${config})"
+tool_home="$(jq -r -c '.tool_home' ${config})"
+
+declare -A next_exec
+declare -A next_tracker
+
+# Make sure output directories exist for each structure ID
+for i in ${structure_list} ; do
+    mkdir -p ${snap_dir}/${i}
+done
+
+# Get now in milliseconds
+get_now() {
+    echo $(( $(date +"%s") * 1000 ))
+}
+
+# Return TID from tracked record
+get_tid() {
+    echo $(echo $1 | egrep -o 'tid=[0-9]+' | awk -F= '{print $2}')
+}
+
+# Return tracker start from tracked record
+get_tracker_start() {
+    echo $(echo $1 | egrep -o 'trackerStart=[0-9]+' | awk -F= '{print $2}')
+}
+
+# Create or return the start time of the next scheduled event for this structure
+# If second argument exists, then it specifies a start delay in seconds
+get_or_create_tracker() {
+    # Check for existing unfinished tracker first
+    structure_id=$1
+    shift
+    start_time=$(get_now)
+    if [ $# -gt 0 ] ; then
+	start_time=$(( ${start_time} + ($1 * 1000) ))
+    fi
+
+    # Find current unfinished tracker
+    if ! tracked=$(${tool_home}/ekdptool tracker -s ${source_id} -d ${structure_id} unfinished) ; then
+	echo "Fatal error finding unfinished tracker for structure: ${structure_id}"
+	exit 1
+    fi
+
+    # If no existing unfinished tracker, then create one, start it, and retrieve information
+    if [ -z "${tracked}" ] ; then
+	# No tracker, create one
+	if ! tracked=$(${tool_home}/ekdptool tracker -s ${source_id} create ${structure_id}) ; then
+	    echo "Fatal error creating tracker for structure: ${structure_id}"
+	    exit 1
+	fi
+	if ! ${tool_home}/ekdptool tracker -s ${source_id} -t ${tracked} start ${start_time} ; then
+	    echo "Fatal error starting tracker for structure: ${structure_id}"
+	    exit 1
+	fi
+	tracked=$(${tool_home}/ekdptool tracker -s ${source_id} -d ${structure_id} unfinished)
+    fi
+
+    # Return tracker
+    echo "${tracked}"
+}
+
+# Generate logging timestamp
+stamp() {
+    echo "$(date +'%Y%m%dT%H:%M:%S %Z')"
+}
+
+# Run forever
+while true ; do
+    # Verify we have a scheduled tracking event for each structure
+    echo "$(stamp) Start retrieving trackers"
+    for t in ${structure_list} ; do
+	next_tracker=$(get_or_create_tracker ${t})
+	tracker_start=$(get_tracker_start "${next_tracker}")
+	tracker_tid=$(get_tid "${next_tracker}")
+	next_exec["$t"]=${tracker_start}
+	next_tracker["$t"]=${tracker_tid}
+    done
+    echo "$(stamp) Finish retrieving trackers"
+    
+    # Find which tracker is supposed to start next and when
+    next_time=-1
+    next_id=0
+    for t in ${structure_list} ; do
+	if [ ${next_id} -eq 0 ] ; then
+	    next_time=${next_exec["$t"]}
+	    next_id=$t
+	elif [ ${next_exec["$t"]} -lt ${next_time} ] ; then
+	    next_time=${next_exec["$t"]}
+	    next_id=$t
+	fi
+    done
+	    
+    # If we're past the start time of the next tracker, go ahead and start it.
+    # Otherwise, we'll sleep until the correct start time.
+    now=$(get_now)
+    if [ ${next_time} -lt ${now} ] ; then
+	echo "$(stamp) Starting retrieval for structure ${next_id}"
+	tstatus="FINISHED"
+	if ! rstatus=$(${tool_home}/md ${next_id} ${token_id} "${tmp_dir}" "${snap_dir}/${next_id}" "${tool_home}") ; then
+	    # Retrieval failed, try again in one minute, mark tracker as finished with error
+	    echo "Failed to retrieve for structure: ${next_id}"
+	    tstatus="ERROR"
+	    rstatus="expires in 60"
+	fi
+	# Finalize tracker
+	if ! ${tool_home}/ekdptool tracker -s ${source_id} -t ${next_tracker["${next_id}"]} end ; then
+	    echo "Fatal error ending tracker for structure: ${next_id}"
+	    exit 1
+	fi
+	if ! ${tool_home}/ekdptool tracker -s ${source_id} -t ${next_tracker["${next_id}"]} status ${tstatus} "${rstatus}" ; then
+	    echo "Fatal error setting status for tracker for structure: ${next_id}"
+	    exit 1
+	fi
+	# Create tracker for next run
+	delay=$(echo ${rstatus} | awk '{print $3}')
+	get_or_create_tracker ${next_id} ${delay} > /dev/null
+	echo "$(stamp) Finished retrieval for structure ${next_id}"
+    else
+	delay=$(( (${next_time} - ${now})/1000 ))
+	echo "$(stamp) Sleeping for ${delay} seconds until next scheduled retrieval"
+	sleep ${delay}
+    fi
+    
+done
+
