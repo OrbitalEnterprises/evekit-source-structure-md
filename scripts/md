@@ -24,7 +24,7 @@ structure=$1
 tokenid=$2
 now=$(( $(date +"%s") * 1000 ))
 here=$(pwd)
-snapfilename=structure_${structure}_${now}_$(date +"%Y%m%d")
+snapfilename=structure_${structure}_${now}_$(date -u +"%Y%m%d")
 assembly=$3/struct_${structure}_$$
 output_dir=$4
 tool_dir=$5
@@ -65,7 +65,7 @@ done
 
 # Convert result to single CSV file
 echo "order_id,type_id,location_id,volume_total,volume_remain,min_volume,price,is_buy_order,duration,issued,range" >> ${assembly}/${snapfilename}.csv
-cat page_*.json | jq -c '.[]|[.order_id, .type_id, .location_id, .volume_total, .volume_remain, .min_volume, .price, .is_buy_order, .duration, .issued, .range]' | sed -e 's/\[//g' -e 's/\]//g' -e 's/^[[:space:]]*//g' -e 's/[[:space:]]*$//g' >> ${output_dir}/${snapfilename}.csv
+cat page_*.json | jq -c '.[]|[.order_id, .type_id, .location_id, .volume_total, .volume_remain, .min_volume, .price, .is_buy_order, .duration, .issued, .range]' | sed -e 's/\[//g' -e 's/\]//g' -e 's/^[[:space:]]*//g' -e 's/[[:space:]]*$//g' >> ${assembly}/${snapfilename}.csv
 gzip ${assembly}/${snapfilename}.csv
 mv ${assembly}/${snapfilename}.csv.gz ${output_dir}
 

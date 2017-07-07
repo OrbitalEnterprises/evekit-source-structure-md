@@ -71,7 +71,7 @@ get_or_create_tracker() {
 
 # Generate logging timestamp
 stamp() {
-    echo "$(date +'%Y%m%dT%H:%M:%S %Z')"
+    echo "$(date -u +'%Y%m%dT%H:%M:%S %Z')"
 }
 
 # Run an instance of the ekdp tool in daemon mode to make tracker management go faster
