@@ -64,9 +64,10 @@ while [ ${done} -eq 0 ] ; do
 done
 
 # Convert result to single CSV file
-echo "order_id,type_id,location_id,volume_total,volume_remain,min_volume,price,is_buy_order,duration,issued,range" >> ${output_dir}/${snapfilename}.csv
+echo "order_id,type_id,location_id,volume_total,volume_remain,min_volume,price,is_buy_order,duration,issued,range" >> ${assembly}/${snapfilename}.csv
 cat page_*.json | jq -c '.[]|[.order_id, .type_id, .location_id, .volume_total, .volume_remain, .min_volume, .price, .is_buy_order, .duration, .issued, .range]' | sed -e 's/\[//g' -e 's/\]//g' -e 's/^[[:space:]]*//g' -e 's/[[:space:]]*$//g' >> ${output_dir}/${snapfilename}.csv
-gzip ${output_dir}/${snapfilename}.csv
+gzip ${assembly}/${snapfilename}.csv
+mv ${assembly}/${snapfilename}.csv.gz ${output_dir}
 
 # Determine expiry
 seconds_expires=$(date -d "$(cat header_01.txt | egrep -e 'Expires:' | awk -F, '{print $2}')" +"%s")

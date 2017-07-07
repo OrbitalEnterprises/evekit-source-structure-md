@@ -9,6 +9,7 @@ token_id=$(jq -r -c '.token_id' ${config})
 tmp_dir="$(jq -r -c '.tmp_dir' ${config})"
 snap_dir="$(jq -r -c '.snapshot_dir' ${config})"
 tool_home="$(jq -r -c '.tool_home' ${config})"
+ekdpport=10220
 
 declare -A next_exec
 declare -A next_tracker
@@ -41,27 +42,27 @@ get_or_create_tracker() {
     shift
     start_time=$(get_now)
     if [ $# -gt 0 ] ; then
-	start_time=$(( ${start_time} + ($1 * 1000) ))
+	    start_time=$(( ${start_time} + ($1 * 1000) ))
     fi
 
     # Find current unfinished tracker
-    if ! tracked=$(${tool_home}/ekdptool tracker -s ${source_id} -d ${structure_id} unfinished) ; then
-	echo "Fatal error finding unfinished tracker for structure: ${structure_id}"
-	exit 1
+    if ! tracked=$(echo "tracker -s ${source_id} -d ${structure_id} unfinished" | nc localhost ${ekdpport}) ; then
+        echo "Fatal error finding unfinished tracker for structure: ${structure_id}"
+	    exit 1
     fi
 
     # If no existing unfinished tracker, then create one, start it, and retrieve information
     if [ -z "${tracked}" ] ; then
-	# No tracker, create one
-	if ! tracked=$(${tool_home}/ekdptool tracker -s ${source_id} create ${structure_id}) ; then
-	    echo "Fatal error creating tracker for structure: ${structure_id}"
-	    exit 1
-	fi
-	if ! ${tool_home}/ekdptool tracker -s ${source_id} -t ${tracked} start ${start_time} ; then
-	    echo "Fatal error starting tracker for structure: ${structure_id}"
-	    exit 1
-	fi
-	tracked=$(${tool_home}/ekdptool tracker -s ${source_id} -d ${structure_id} unfinished)
+	    # No tracker, create one
+	    if ! tracked=$(echo "tracker -s ${source_id} create ${structure_id}" | nc localhost ${ekdpport}) ; then
+	        echo "Fatal error creating tracker for structure: ${structure_id}"
+	        exit 1
+	    fi
+	    if ! (echo "tracker -s ${source_id} -t ${tracked} start ${start_time}" | nc localhost ${ekdpport}) ; then
+	        echo "Fatal error starting tracker for structure: ${structure_id}"
+	        exit 1
+	    fi
+	    tracked=$(echo "tracker -s ${source_id} -d ${structure_id} unfinished" | nc localhost ${ekdpport})
     fi
 
     # Return tracker
@@ -72,6 +73,9 @@ get_or_create_tracker() {
 stamp() {
     echo "$(date +'%Y%m%dT%H:%M:%S %Z')"
 }
+
+# Run an instance of the ekdp tool in daemon mode to make tracker management go faster
+${tool_home}/ekdptool -s${ekdpport} &
 
 # Run forever
 while true ; do
@@ -112,11 +116,11 @@ while true ; do
 	    rstatus="expires in 60"
 	fi
 	# Finalize tracker
-	if ! ${tool_home}/ekdptool tracker -s ${source_id} -t ${next_tracker["${next_id}"]} end ; then
+	if ! (echo "tracker -s ${source_id} -t "${next_tracker["${next_id}"]}" end" | nc localhost ${ekdpport}) ; then
 	    echo "Fatal error ending tracker for structure: ${next_id}"
 	    exit 1
 	fi
-	if ! ${tool_home}/ekdptool tracker -s ${source_id} -t ${next_tracker["${next_id}"]} status ${tstatus} "${rstatus}" ; then
+	if ! (echo "tracker -s ${source_id} -t "${next_tracker["${next_id}"]}" status ${tstatus} \"${rstatus}\"" | nc localhost ${ekdpport}) ; then
 	    echo "Fatal error setting status for tracker for structure: ${next_id}"
 	    exit 1
 	fi
