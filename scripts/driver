@@ -47,8 +47,8 @@ get_or_create_tracker() {
 
     # Find current unfinished tracker
     if ! tracked=$(echo "tracker -s ${source_id} -d ${structure_id} unfinished" | nc localhost ${ekdpport}) ; then
-        echo "Fatal error finding unfinished tracker for structure: ${structure_id}"
-	    exit 1
+        echo "$? Fatal error finding unfinished tracker for structure: ${structure_id} ${tracked}"
+	exit 1
     fi
 
     # If no existing unfinished tracker, then create one, start it, and retrieve information
@@ -76,6 +76,11 @@ stamp() {
 
 # Run an instance of the ekdp tool in daemon mode to make tracker management go faster
 ${tool_home}/ekdptool -s${ekdpport} &
+ekdpdaemon=$!
+trap "kill -n 9 ${ekdpdaemon}" 0
+
+# Give tool a chance to start before we start sending commands
+sleep 5
 
 # Run forever
 while true ; do
@@ -106,7 +111,7 @@ while true ; do
     # If we're past the start time of the next tracker, go ahead and start it.
     # Otherwise, we'll sleep until the correct start time.
     now=$(get_now)
-    if [ ${next_time} -lt ${now} ] ; then
+    if [ ${next_time} -le ${now} ] ; then
 	echo "$(stamp) Starting retrieval for structure ${next_id}"
 	tstatus="FINISHED"
 	if ! rstatus=$(${tool_home}/md ${next_id} ${token_id} "${tmp_dir}" "${snap_dir}/${next_id}" "${tool_home}") ; then
@@ -120,7 +125,8 @@ while true ; do
 	    echo "Fatal error ending tracker for structure: ${next_id}"
 	    exit 1
 	fi
-	if ! (echo "tracker -s ${source_id} -t "${next_tracker["${next_id}"]}" status ${tstatus} \"${rstatus}\"" | nc localhost ${ekdpport}) ; then
+	single_word_status=$(echo "${rstatus}" | sed -e 's/ /\-/g')
+	if ! (echo "tracker -s ${source_id} -t "${next_tracker["${next_id}"]}" status ${tstatus} ${single_word_status}" | nc localhost ${ekdpport}) ; then
 	    echo "Fatal error setting status for tracker for structure: ${next_id}"
 	    exit 1
 	fi
