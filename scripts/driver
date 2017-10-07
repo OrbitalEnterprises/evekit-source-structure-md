@@ -162,6 +162,8 @@ while true ; do
     for next_structure in ${structure_list} ; do
 	run_structure_retriever ${next_structure} &
 	proc_list="$! ${proc_list}"
+	# Space out update threads to reduce contention
+	sleep 60
     done
     wait ${proc_list}
     

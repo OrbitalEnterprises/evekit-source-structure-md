@@ -33,7 +33,7 @@ trap "cd ${here} ; rm -rf ${assembly}" 0
 cd ${assembly}
 
 # Retrieve token
-if ! auth=$(echo "token -k ${tokenid} refresh -s 600" | nc localhost ${tool_port}) ; then
+if ! auth=$(echo "token -k ${tokenid} refresh -s 60" | nc localhost ${tool_port}) ; then
     echo "error refreshing ESI token, existing"
     exit 1
 fi
