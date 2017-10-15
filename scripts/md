@@ -6,7 +6,7 @@
 # $2 - token ID
 # $3 - assembly dir
 # $4 - output dir
-# $5 - tool dir
+# $5 - tool port
 
 # Check a header file for an OK response
 check_header() {
@@ -27,13 +27,13 @@ here=$(pwd)
 snapfilename=structure_${structure}_${now}_$(date -u +"%Y%m%d")
 assembly=$3/struct_${structure}_$$
 output_dir=$4
-tool_dir=$5
+tool_port=$5
 mkdir -p ${assembly}
 trap "cd ${here} ; rm -rf ${assembly}" 0
 cd ${assembly}
 
 # Retrieve token
-if ! auth=$(${tool_dir}/ekdptool token -k ${tokenid} refresh -s 600) ; then
+if ! auth=$(echo "token -k ${tokenid} refresh -s 60" | nc localhost ${tool_port}) ; then
     echo "error refreshing ESI token, existing"
     exit 1
 fi

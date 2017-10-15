@@ -9,15 +9,26 @@ token_id=$(jq -r -c '.token_id' ${config})
 tmp_dir="$(jq -r -c '.tmp_dir' ${config})"
 snap_dir="$(jq -r -c '.snapshot_dir' ${config})"
 tool_home="$(jq -r -c '.tool_home' ${config})"
-ekdpport=10220
-
-declare -A next_exec
-declare -A next_tracker
+ekdpport=$(jq -r -c '.port' ${config})
+if [ "${ekdpport}" = "null" ] ; then
+    start_ekdp=1
+    ekdpport=10220
+else
+    start_ekdp=0
+fi
 
 # Make sure output directories exist for each structure ID
 for i in ${structure_list} ; do
     mkdir -p ${snap_dir}/${i}
 done
+
+if [ ${start_ekdp} -eq 1 ] ; then
+    # Run an instance of the ekdp tool in daemon mode to make tracker management go faster
+    ${tool_home}/ekdptool -s${ekdpport} &
+    ekdpdaemon=$!
+    trap "kill -n 9 ${ekdpdaemon}" 0
+    sleep 5
+fi
 
 # Get now in milliseconds
 get_now() {
@@ -31,7 +42,7 @@ get_tid() {
 
 # Return tracker start from tracked record
 get_tracker_start() {
-    echo $(echo $1 | egrep -o 'trackerStart=[0-9]+' | awk -F= '{print $2}')
+    echo $(echo $1 | egrep -o 'trackerStart=-?[0-9]+' | awk -F= '{print $2}')
 }
 
 # Create or return the start time of the next scheduled event for this structure
@@ -47,7 +58,7 @@ get_or_create_tracker() {
 
     # Find current unfinished tracker
     if ! tracked=$(echo "tracker -s ${source_id} -d ${structure_id} unfinished" | nc localhost ${ekdpport}) ; then
-        echo "$? Fatal error finding unfinished tracker for structure: ${structure_id} ${tracked}"
+        echo "$(stamp) Fatal error finding unfinished tracker for structure: ${structure_id} ${tracked}"
 	exit 1
     fi
 
@@ -55,10 +66,10 @@ get_or_create_tracker() {
     if [ -z "${tracked}" ] ; then
 	    # No tracker, create one
 	    if ! tracked=$(echo "tracker -s ${source_id} create ${structure_id}" | nc localhost ${ekdpport}) ; then
-	        echo "Fatal error creating tracker for structure: ${structure_id}"
+	        echo "$(stamp) Fatal error creating tracker for structure: ${structure_id}"
 	        exit 1
 	    fi
-	    if ! (echo "tracker -s ${source_id} -t ${tracked} start ${start_time}" | nc localhost ${ekdpport}) ; then
+	    if ! (echo "$(stamp) tracker -s ${source_id} -t ${tracked} start ${start_time}" | nc localhost ${ekdpport}) ; then
 	        echo "Fatal error starting tracker for structure: ${structure_id}"
 	        exit 1
 	    fi
@@ -74,71 +85,87 @@ stamp() {
     echo "$(date -u +'%Y%m%dT%H:%M:%S %Z')"
 }
 
-# Run an instance of the ekdp tool in daemon mode to make tracker management go faster
-${tool_home}/ekdptool -s${ekdpport} &
-ekdpdaemon=$!
-trap "kill -n 9 ${ekdpdaemon}" 0
+# Launch a structure market data retriever for a given structure.
+# This function is normnally launched as a separate process
+# which will wait for the subprocess to exit, automatically restarting
+# in the case of a failure.
+run_structure_retriever() {
+    next_structure=$1
+    while true ; do
+	echo "$(stamp) Starting order book thread for structure ${next_structure}"
+	(
+	    while true ; do
+		# Get a tracker 
+		echo "$(stamp) Start retrieving trackers ${next_structure}"
+		next_tracker=$(get_or_create_tracker $next_structure)
+		tracker_start=$(get_tracker_start "${next_tracker}")
+		tracker_tid=$(get_tid "${next_tracker}")
+		echo "$(stamp) Finish retrieving trackers"
 
-# Give tool a chance to start before we start sending commands
-sleep 5
+		# Verify we're ready to start tracking, otherwise sleep until this
+		# tracker says to start.
+		now=$(get_now)
+		if [ ${tracker_start} -le ${now} ] ; then
+		    # Assume we'll complete ok
+		    tstatus="FINISHED"
+		    
+		    # Retrieve structure order book
+		    if ! rstatus=$(${tool_home}/md ${next_structure} ${token_id} "${tmp_dir}" "${snap_dir}/${next_structure}" ${ekdpport}) ; then
+			# Retrieval failed, try again in one minute, mark tracker as finished with error
+			echo "$(stamp) Failed to retrieve for structure: ${next_structure}"
+			tstatus="ERROR"
+			rstatus="expires in 60"
+		    fi
+		    
+		    # Finalize tracker
+		    if ! (echo "tracker -s ${source_id} -t ${tracker_tid} end" | nc localhost ${ekdpport}) ; then
+			echo "$(stamp) Fatal error ending tracker for structure: ${next_structure}"
+			exit 1
+		    fi
+
+		    # Set tracker status
+		    single_word_status=$(echo "${rstatus}" | sed -e 's/ /\-/g')
+		    if ! (echo "tracker -s ${source_id} -t ${tracker_tid} status ${tstatus} ${single_word_status}" | nc localhost ${ekdpport}) ; then
+			echo "$(stamp) Fatal error setting status for tracker for order book ${next_structure}"
+			exit 1
+		    fi
+
+		    # Create tracker based on expiry reported by md in seconds
+		    delay=$(echo ${rstatus} | awk '{print $3}')
+		    if [ ${delay} -le 0 ] ; then
+			delay=0
+		    fi
+		    get_or_create_tracker ${next_structure} ${delay} > /dev/null
+		    echo "$(stamp) Finished retrieval for structure ${next_structure}, next retrieval in ${delay} seconds"
+		else
+		    delay=$(( (${tracker_start} - ${now})/1000 ))
+		    echo "$(stamp) Sleeping for ${delay} seconds until next scheduled retrieval for structure ${next_structure}"
+		    if [ ${delay} -lt 0 ] ; then
+			delay=0
+		    fi
+		    sleep ${delay}
+		fi
+	    done
+	) &
+	wait $!
+	echo "$(stamp) Order book thread for structure ${next_structure} ended"
+	echo "$(stamp) Pausing 60 seconds before restart"
+	sleep 60
+    done
+}
 
 # Run forever
 while true ; do
-    # Verify we have a scheduled tracking event for each structure
-    echo "$(stamp) Start retrieving trackers"
-    for t in ${structure_list} ; do
-	next_tracker=$(get_or_create_tracker ${t})
-	tracker_start=$(get_tracker_start "${next_tracker}")
-	tracker_tid=$(get_tid "${next_tracker}")
-	next_exec["$t"]=${tracker_start}
-	next_tracker["$t"]=${tracker_tid}
+    # Start one order book retriever thread for each structure.  Each thread
+    # is also responsible for controlling its own tracker.
+    proc_list=''
+    for next_structure in ${structure_list} ; do
+	run_structure_retriever ${next_structure} &
+	proc_list="$! ${proc_list}"
+	# Space out update threads to reduce contention
+	sleep 60
     done
-    echo "$(stamp) Finish retrieving trackers"
-    
-    # Find which tracker is supposed to start next and when
-    next_time=-1
-    next_id=0
-    for t in ${structure_list} ; do
-	if [ ${next_id} -eq 0 ] ; then
-	    next_time=${next_exec["$t"]}
-	    next_id=$t
-	elif [ ${next_exec["$t"]} -lt ${next_time} ] ; then
-	    next_time=${next_exec["$t"]}
-	    next_id=$t
-	fi
-    done
-	    
-    # If we're past the start time of the next tracker, go ahead and start it.
-    # Otherwise, we'll sleep until the correct start time.
-    now=$(get_now)
-    if [ ${next_time} -le ${now} ] ; then
-	echo "$(stamp) Starting retrieval for structure ${next_id}"
-	tstatus="FINISHED"
-	if ! rstatus=$(${tool_home}/md ${next_id} ${token_id} "${tmp_dir}" "${snap_dir}/${next_id}" "${tool_home}") ; then
-	    # Retrieval failed, try again in one minute, mark tracker as finished with error
-	    echo "Failed to retrieve for structure: ${next_id}"
-	    tstatus="ERROR"
-	    rstatus="expires in 60"
-	fi
-	# Finalize tracker
-	if ! (echo "tracker -s ${source_id} -t "${next_tracker["${next_id}"]}" end" | nc localhost ${ekdpport}) ; then
-	    echo "Fatal error ending tracker for structure: ${next_id}"
-	    exit 1
-	fi
-	single_word_status=$(echo "${rstatus}" | sed -e 's/ /\-/g')
-	if ! (echo "tracker -s ${source_id} -t "${next_tracker["${next_id}"]}" status ${tstatus} ${single_word_status}" | nc localhost ${ekdpport}) ; then
-	    echo "Fatal error setting status for tracker for structure: ${next_id}"
-	    exit 1
-	fi
-	# Create tracker for next run
-	delay=$(echo ${rstatus} | awk '{print $3}')
-	get_or_create_tracker ${next_id} ${delay} > /dev/null
-	echo "$(stamp) Finished retrieval for structure ${next_id}"
-    else
-	delay=$(( (${next_time} - ${now})/1000 ))
-	echo "$(stamp) Sleeping for ${delay} seconds until next scheduled retrieval"
-	sleep ${delay}
-    fi
+    wait ${proc_list}
     
 done
 
