@@ -8,12 +8,9 @@ be set at install time or, more typically, in your Maven profile:
 
 * `enterprises.orbital.token.eve_client_id` - Your EVE SSO application client ID to be used to re-authorize ESI tokens.
 * `enterprises.orbital.token.eve_secret_key` - Your EVE SSO application secret key to be used to re-authorize ESI tokens.
-* `enterprises.orbital.evekit.dataplatform.db.account.url` - The MySQL connection URL for EveKit account information.
-* `enterprises.orbital.evekit.dataplatform.db.account.user` - The EveKit account database user name.
-* `enterprises.orbital.evekit.dataplatform.db.account.password` - The EveKit account database password.
-* `enterprises.orbital.evekit.dataplatform.db.registry.url` - The MySQL connection URL for the data platform.
-* `enterprises.orbital.evekit.dataplatform.db.registry.user` - The data platform database user name.
-* `enterprises.orbital.evekit.dataplatform.db.registry.password` - The data platform database password.
+* `enterprises.orbital.evekit.dataplatform.db.url` - The MySQL connection URL for EveKit Data Platform information.
+* `enterprises.orbital.evekit.dataplatform.db.user` - The EveKit Data Platform database user name.
+* `enterprises.orbital.evekit.dataplatform.db.password` - The EveKit Data Platform database password.
 
 All other Maven configuration properties have suitable defaults defined in `pom.xml`.
 
@@ -36,7 +33,7 @@ the file `config.json.sample`.  This file consists of a single JSON object with 
 * `structures` - A list of structure IDs to retrieve.
 * `tmp_dir` - A directory with sufficient space for staging market data downloads.
 * `snapshot_dir` - A directory where market data snapshots should be stored.
-* `token_id` - Your EveKit ESI token ID.
+* `token_id` - Your EveKit Data Platform ESI token ID.
 
 Each snapshot file will be stored in a file at path:
 
