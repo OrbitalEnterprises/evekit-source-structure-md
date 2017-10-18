@@ -24,7 +24,7 @@ done
 
 if [ ${start_ekdp} -eq 1 ] ; then
     # Run an instance of the ekdp tool in daemon mode to make tracker management go faster
-    ${tool_home}/ekdptool -s${ekdpport} > ekdpserver.out 2>&1 &
+    ${tool_home}/ekdptool -s${ekdpport} > ${tool_home}/ekdpserver.out 2>&1 &
     ekdpdaemon=$!
     trap "kill -n 9 ${ekdpdaemon}" 0
     sleep 5
